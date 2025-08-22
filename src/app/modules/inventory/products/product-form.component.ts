@@ -1,15 +1,17 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, OnInit, DestroyRef } from '@angular/core';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
-import { FormBuilder, Validators, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { Services } from '../../../shared/services/services';
+import { FormBuilder, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIf } from '@angular/common';
+import { finalize, switchMap, of } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Services } from '../../../shared/services/services';
 import { InputComponent } from '../../../shared/components/input.component';
 import { BtnComponent } from '../../../shared/components/btn.component';
 
 @Component({
   standalone: true,
   imports: [ReactiveFormsModule, NgIf, RouterLink, InputComponent, BtnComponent],
-  template: `
+  template:  `
   <div class="max-w-4xl mx-auto space-y-6">
     <!-- Header con breadcrumb -->
     <div class="flex items-center gap-2 text-sm text-slate-600 mb-2">
@@ -52,7 +54,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="SKU"
               placeholder="Ej: PROD-001"
-              [control]="form.controls['sku']"
+              formControlName="sku"
               [error]="getError('sku')"
               [required]="true"
               leftIcon="🏷️"
@@ -62,7 +64,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="Nombre del Producto"
               placeholder="Ej: Laptop Dell Inspiron"
-              [control]="form.controls['name']"
+              formControlName="name"
               [error]="getError('name')"
               [required]="true"
               leftIcon="📦"
@@ -76,7 +78,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="Descripción Corta"
               placeholder="Breve descripción del producto (opcional)"
-              [control]="form.controls['shortDesc']"
+              formControlName="shortDesc"
               leftIcon="📝"
               [showClearButton]="true"
               helpText="Descripción opcional para facilitar la identificación">
@@ -88,7 +90,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="Unidad de Medida"
               placeholder="Ej: UN, KG, LT"
-              [control]="form.controls['unitOfMeasure']"
+              formControlName="unitOfMeasure"
               [error]="getError('unitOfMeasure')"
               [required]="true"
               leftIcon="📏"
@@ -166,11 +168,12 @@ import { BtnComponent } from '../../../shared/components/btn.component';
   </div>
   `
 })
-export class ProductFormComponent {
+export class ProductFormComponent implements OnInit {
   private fb = inject(FormBuilder);
   private svc = inject(Services);
   private ar = inject(ActivatedRoute);
   private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
 
   loading = false;
   error: string | null = null;
@@ -179,21 +182,45 @@ export class ProductFormComponent {
   id?: string;
 
   form = this.fb.nonNullable.group({
-    sku: this.fb.nonNullable.control<string>('', { validators: [Validators.required] }),
-    name: this.fb.nonNullable.control<string>('', { validators: [Validators.required] }),
-    shortDesc: this.fb.nonNullable.control<string>(''),
-    unitOfMeasure: this.fb.nonNullable.control<string>('UN', { validators: [Validators.required] }),
+    sku: ['', [Validators.required]],
+    name: ['', [Validators.required]],
+    shortDesc: [''],
+    unitOfMeasure: ['UN', [Validators.required]],
   });
 
-  constructor() {
-    this.id = this.ar.snapshot.paramMap.get('id') || undefined;
-    this.isEdit = !!this.id;
+  ngOnInit(): void {
+    this.ar.paramMap
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        switchMap(pm => {
+          this.id = pm.get('id') || undefined;
+          this.isEdit = !!this.id;
 
-    if (this.isEdit) {
-      this.form.controls['sku'].disable();
-      // Aquí cargarías los datos del producto
-      // this.svc.products.getById(this.id!).subscribe(r => this.form.patchValue(r.data));
-    }
+          if (!this.isEdit) return of(null);
+
+          this.form.controls.sku.disable();
+          this.loading = true;
+          this.error = null;
+
+          return this.svc.products.getById(this.id!);
+        }),
+        finalize(() => (this.loading = false))
+      )
+      .subscribe({
+        next: (resp: any) => {
+          if (!resp) return;
+          const p = resp.data;
+          this.form.patchValue({
+            sku: p.sku,
+            name: p.name,
+            shortDesc: p.shortDesc ?? '',
+            unitOfMeasure: p.unitOfMeasure ?? 'UN',
+          });
+        },
+        error: (e) => {
+          this.error = e?.error?.message ?? 'No se pudo cargar el producto';
+        }
+      });
   }
 
   getError(field: keyof typeof this.form.controls): string | null {
@@ -216,32 +243,28 @@ export class ProductFormComponent {
 
   submit() {
     if (this.form.invalid) return;
-    
+
     this.loading = true;
     this.error = null;
     this.success = false;
 
     const payload = this.form.getRawValue();
 
-    const done = () => {
+    const onDone = () => {
       this.loading = false;
       this.success = true;
-      
-      // Redirigir después de mostrar el éxito
-      setTimeout(() => {
-        this.router.navigateByUrl('/inventory');
-      }, 1500);
+      setTimeout(() => this.router.navigateByUrl('/inventory'), 1500);
     };
-    
-    const fail = (e: any) => {
+
+    const onFail = (e: any) => {
       this.loading = false;
       this.error = e?.error?.message ?? (this.isEdit ? 'Error al guardar el producto' : 'Error al crear el producto');
     };
 
     if (!this.isEdit) {
-      this.svc.products.create(payload as any).subscribe({ next: done, error: fail });
+      this.svc.products.create(payload as any).subscribe({ next: onDone, error: onFail });
     } else {
-      this.svc.products.update(this.id!, payload as any).subscribe({ next: done, error: fail });
+      this.svc.products.update(this.id!, payload as any).subscribe({ next: onDone, error: onFail });
     }
   }
 }

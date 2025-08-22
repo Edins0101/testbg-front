@@ -10,5 +10,5 @@ export const INVENTORY_ROUTES: Routes = [
   { path: 'suppliers/:id/edit', loadComponent: () => import('./suppliers/supplier-form.component').then(m => m.SupplierFormComponent) },
 
   { path: 'product-suppliers', loadComponent: () => import('./ps/ps-search.component').then(m => m.PsSearchComponent) },
-  { path: 'product-suppliers/:productId', loadComponent: () => import('./ps/ps-list.component').then(m => m.PsSearchComponent) },
+  { path: 'product-suppliers/:productId', loadComponent: () => import('./ps/ps-list.component').then(m => m.PsListComponent) },
 ];

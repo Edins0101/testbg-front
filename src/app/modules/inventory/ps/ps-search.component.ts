@@ -1,17 +1,19 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
-import { FormsModule, FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormsModule } from '@angular/forms';
+import { NgIf, NgFor } from '@angular/common';
+import { Subject, Subscription, of } from 'rxjs';
+import { debounceTime, distinctUntilChanged, switchMap, catchError } from 'rxjs/operators';
+
 import { Services } from '../../../shared/services/services';
 import { Product } from '../../../shared/interfaces';
 import { InputComponent } from '../../../shared/components/input.component';
 import { BtnComponent } from '../../../shared/components/btn.component';
 import { TableComponent } from '../../../shared/components/table.component';
-import { NgIf, NgFor } from '@angular/common';
-import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
 
 @Component({
   standalone: true,
-  imports: [FormsModule, ReactiveFormsModule, NgIf, NgFor, InputComponent, BtnComponent, TableComponent],
+  imports: [FormsModule, NgIf, NgFor, InputComponent, BtnComponent, TableComponent],
   template: `
   <div class="max-w-4xl mx-auto space-y-6">
     <!-- Header -->
@@ -51,6 +53,7 @@ import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
                 label="Buscar producto"
                 placeholder="Ingresa nombre o SKU del producto..."
                 [(ngModel)]="searchTerm"
+                (ngModelChange)="onSearchTerm($event)"
                 [loading]="searchLoading"
                 leftIcon="🔍"
                 [showClearButton]="true"
@@ -132,7 +135,7 @@ import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
                  (click)="goToProduct(product.productId)">
               <div class="flex items-center gap-3">
                 <div class="w-8 h-8 rounded-lg bg-slate-100 group-hover:bg-indigo-100 flex items-center justify-center">
-                  <span class="text-xs font-mono">{{ product.sku.substring(0, 3) }}</span>
+                  <span class="text-xs font-mono">{{ product.sku?.substring(0, 3) }}</span>
                 </div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium text-slate-800 truncate">{{ product.name }}</div>
@@ -180,61 +183,92 @@ import { debounceTime, distinctUntilChanged, switchMap, of } from 'rxjs';
   </ng-template>
   `
 })
-export class PsSearchComponent implements OnInit {
+export class PsSearchComponent implements OnInit, OnDestroy {
   constructor(private router: Router, private svc: Services) {}
 
   // Búsqueda inteligente
   searchTerm = '';
   searchLoading = false;
   searchResults: Product[] = [];
+  private search$ = new Subject<string>();
+  private subs = new Subscription();
 
   // Acceso directo
   directProductId = '';
 
-  // Productos recientes (simulado - en producción vendría del localStorage o API)
+  // Productos recientes
   recentProducts: Product[] = [];
+  private RECENT_KEY = 'recentProductSuppliers';
 
   ngOnInit() {
-    // Cargar productos recientes del localStorage si existen
     this.loadRecentProducts();
+
+    // Suscripción con debounce para búsqueda en vivo
+    this.subs.add(
+      this.search$
+        .pipe(
+          debounceTime(350),
+          distinctUntilChanged(),
+          switchMap(term => {
+            if (!term || !term.trim()) {
+              this.searchResults = [];
+              return of(null);
+            }
+            this.searchLoading = true;
+            return this.svc.products
+              .list({ page: 1, pageSize: 10, search: term })
+              .pipe(
+                catchError(() => of(null))
+              );
+          })
+        )
+        .subscribe((resp: any) => {
+          if (resp?.data?.items) {
+            this.searchResults = resp.data.items;
+          }
+          this.searchLoading = false;
+        })
+    );
+  }
+
+  ngOnDestroy() {
+    this.subs.unsubscribe();
+  }
+
+  onSearchTerm(term: string) {
+    this.search$.next(term);
   }
 
   searchProducts() {
     if (!this.searchTerm.trim()) return;
-    
-    this.searchLoading = true;
-    this.svc.products
-      .list({ page: 1, pageSize: 10, search: this.searchTerm })
-      .subscribe({
-        next: (response) => {
-          this.searchResults = response.data.items;
-          this.searchLoading = false;
-        },
-        error: () => {
-          this.searchResults = [];
-          this.searchLoading = false;
-        }
-      });
+    this.onSearchTerm(this.searchTerm);
   }
 
   goToProduct(productId: string) {
     if (!productId) return;
-    
-    // Guardar en productos recientes
     this.addToRecentProducts(productId);
-    
-    // Navegar
     this.router.navigate(['/inventory/product-suppliers', productId]);
   }
 
+  // ---- recientes ----
   private loadRecentProducts() {
-    // En producción, esto vendría del localStorage o una API
-    // Por ahora simulamos algunos productos recientes
-    this.recentProducts = [];
+    try {
+      const raw = localStorage.getItem(this.RECENT_KEY);
+      const list: Product[] = raw ? JSON.parse(raw) : [];
+      this.recentProducts = Array.isArray(list) ? list : [];
+    } catch {
+      this.recentProducts = [];
+    }
   }
 
   private addToRecentProducts(productId: string) {
-    // En producción, guardarías en localStorage
-    // localStorage.setItem('recentProductSuppliers', JSON.stringify(recent));
+    // Tomamos el producto de results si existe para mostrar nombre/sku
+    const found =
+      this.searchResults.find(p => p.productId === productId) ??
+      ({ productId, name: 'Producto', sku: '' } as Partial<Product> as Product);
+
+    const next = [found, ...this.recentProducts.filter(p => p.productId !== productId)].slice(0, 9);
+    this.recentProducts = next;
+    try { localStorage.setItem(this.RECENT_KEY, JSON.stringify(next)); } catch {}
   }
 }

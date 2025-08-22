@@ -18,8 +18,8 @@ import { Observable, tap } from 'rxjs';
 @Injectable({ providedIn: 'root' })
 export class Services {
     private http = inject(HttpClient);
-    private base = environment.apiBaseUrl; // e.g. https://localhost:7173/api
-    private readonly TOKEN_KEY = 'auth_token';
+    private base = environment.apiBaseUrl; 
+    private readonly TOKEN_KEY = 'token';
     // helper pa’ construir HttpParams sin desorden
     private params(pairs: PageQuery | Record<string, any>) {
         let p = new HttpParams();

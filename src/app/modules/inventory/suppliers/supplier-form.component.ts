@@ -1,8 +1,10 @@
-import { Component } from '@angular/core';
+import { Component, DestroyRef, inject, OnInit } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { ReactiveFormsModule, FormBuilder, Validators, FormGroup } from '@angular/forms';
-import { Services } from '../../../shared/services/services';
+import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { NgIf } from '@angular/common';
+import { finalize, switchMap, of } from 'rxjs';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Services } from '../../../shared/services/services';
 import { InputComponent } from '../../../shared/components/input.component';
 import { BtnComponent } from '../../../shared/components/btn.component';
 
@@ -52,7 +54,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="Código del Proveedor"
               placeholder="Ej: PROV-001"
-              [control]="form.controls['code']"
+              formControlName="code"
               [error]="getError('code')"
               [required]="true"
               leftIcon="🏷️"
@@ -62,7 +64,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
             <ui-input
               label="Nombre de la Empresa"
               placeholder="Ej: Distribuidora ABC S.A."
-              [control]="form.controls['name']"
+              formControlName="name"
               [error]="getError('name')"
               [required]="true"
               leftIcon="🏢"
@@ -83,7 +85,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
                 label="Teléfono"
                 placeholder="Ej: +593 99 123 4567"
                 type="tel"
-                [control]="form.controls['phone']"
+                formControlName="phone"
                 leftIcon="📞"
                 [showClearButton]="true"
                 helpText="Número de contacto principal">
@@ -93,7 +95,7 @@ import { BtnComponent } from '../../../shared/components/btn.component';
                 label="Correo Electrónico"
                 placeholder="contacto@empresa.com"
                 type="email"
-                [control]="form.controls['email']"
+                formControlName="email"
                 [error]="getError('email')"
                 leftIcon="✉️"
                 [showClearButton]="true"
@@ -176,43 +178,69 @@ import { BtnComponent } from '../../../shared/components/btn.component';
   </div>
   `
 })
-export class SupplierFormComponent {
+export class SupplierFormComponent implements OnInit {
+  private fb = inject(FormBuilder);
+  private svc = inject(Services);
+  private ar = inject(ActivatedRoute);
+  private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
+
   loading = false;
   error: string | null = null;
   success = false;
   isEdit = false;
   id?: string;
-  form!: FormGroup;
 
-  constructor(
-    private fb: FormBuilder,
-    private svc: Services,
-    private ar: ActivatedRoute,
-    private router: Router
-  ) {
-    // Inicializa el form
-    this.form = this.fb.group({
-      code: this.fb.nonNullable.control<string>('', { validators: [Validators.required] }),
-      name: this.fb.nonNullable.control<string>('', { validators: [Validators.required] }),
-      phone: this.fb.nonNullable.control<string>(''),
-      email: this.fb.nonNullable.control<string>('', { validators: [Validators.email] }),
-    });
+  // Grupo tipado y no-nullable; perfecto para formControlName
+  form = this.fb.nonNullable.group({
+    code: ['', [Validators.required]],
+    name: ['', [Validators.required]],
+    phone: [''],
+    email: ['', [Validators.email]],
+  });
 
-    this.id = this.ar.snapshot.paramMap.get('id') || undefined;
-    this.isEdit = !!this.id;
+  ngOnInit(): void {
+    this.ar.paramMap
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        switchMap(pm => {
+          this.id = pm.get('id') || undefined;
+          this.isEdit = !!this.id;
 
-    if (this.isEdit) {
-      this.form.controls['code'].disable();
-    }
+          if (!this.isEdit) return of(null);
+
+          this.form.controls.code.disable();
+          this.loading = true;
+          this.error = null;
+
+          return this.svc.suppliers.getById(this.id!);
+        }),
+        finalize(() => (this.loading = false))
+      )
+      .subscribe({
+        next: resp => {
+          if (!resp) return;
+          const s = resp.data;
+          this.form.patchValue({
+            code: s.code,
+            name: s.name,
+            phone: s.phone ?? '',
+            email: s.email ?? '',
+          });
+        },
+        error: e => {
+          this.error = e?.error?.message ?? 'No se pudo cargar el proveedor';
+        }
+      });
   }
 
   getError(field: keyof typeof this.form.controls & string): string | null {
-  const c = this.form.controls[field];
-  if (!(c.touched || c.dirty)) return null;
-  if (c.hasError('required')) return `${this.pretty(field)} es requerido`;
-  if (c.hasError('email')) return `Email inválido`;
-  return null;
-}
+    const c = this.form.controls[field];
+    if (!(c.touched || c.dirty)) return null;
+    if (c.hasError('required')) return `${this.pretty(field)} es requerido`;
+    if (c.hasError('email')) return `Email inválido`;
+    return null;
+  }
 
   private pretty(k: string) {
     switch (k) {
@@ -231,16 +259,15 @@ export class SupplierFormComponent {
     this.error = null;
     this.success = false;
 
-    const payload = this.form.getRawValue();
+    const raw = this.form.getRawValue();
+    const { code, ...rest } = raw;
+    const payloadCreate = raw;   // create
+    const payloadUpdate = rest;  // update sin 'code'
 
     const done = () => {
       this.loading = false;
       this.success = true;
-
-      // Redirigir después de mostrar el éxito
-      setTimeout(() => {
-        this.router.navigateByUrl('/inventory/suppliers');
-      }, 1500);
+      setTimeout(() => this.router.navigateByUrl('/inventory/suppliers'), 1200);
     };
 
     const fail = (e: any) => {
@@ -249,9 +276,9 @@ export class SupplierFormComponent {
     };
 
     if (!this.isEdit) {
-      this.svc.suppliers.create(payload as any).subscribe({ next: done, error: fail });
+      this.svc.suppliers.create(payloadCreate as any).subscribe({ next: done, error: fail });
     } else {
-      this.svc.suppliers.update(this.id!, payload as any).subscribe({ next: done, error: fail });
+      this.svc.suppliers.update(this.id!, payloadUpdate as any).subscribe({ next: done, error: fail });
     }
   }
 }
