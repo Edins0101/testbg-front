@@ -48,7 +48,9 @@ export type Supplier = {
 export type ProductSupplier = {
   productSupplierId: string;
   productId: string;
+  product: Product;
   supplierId: string;
+  supplier: Supplier;
   price: number;
   stockQty: number;
   currency: string;

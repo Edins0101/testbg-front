@@ -87,7 +87,7 @@ import { debounceTime, distinctUntilChanged, switchMap, tap, catchError, finaliz
         </thead>
         <tbody>
           <tr *ngFor="let r of rows" class="border-t">
-            <td class="px-4 py-2">{{ r.supplierId }}</td>
+            <td class="px-4 py-2">{{ r.supplier.name }}</td>
             <td class="px-4 py-2">{{ r.price }}</td>
             <td class="px-4 py-2">{{ r.stockQty }}</td>
             <td class="px-4 py-2">{{ r.currency }}</td>

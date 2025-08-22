@@ -12,7 +12,6 @@ export const routes: Routes = [
     children: [
       {
         path: 'inventory',
-        canMatch: [authMatchGuard], // <- bloquea incluso la carga del módulo lazy
         loadChildren: () =>
           import('./modules/inventory/inventory.routes').then(m => m.INVENTORY_ROUTES),
       },
